@@ -11,15 +11,16 @@
         video { border: 1px solid #ccc; margin: 10px; }
         ul { list-style-type: none; padding: 0; }
         li { margin: 5px; padding: 5px; border: 1px solid #ddd; }
-        button { padding: 10px 20px; background: #4CAF50; color: white; border: none; cursor: pointer; }
+        button { padding: 10px 20px; background: #4CAF50; color: white; border: none; cursor: pointer; margin: 5px; }
         button:hover { background: #45a049; }
     </style>
 </head>
 <body>
     <h1>Quét Mã QR</h1>
-    <video id="video" width="400" height="300" autoplay></video>
+    <button id="startScan">Bắt đầu quét</button>
+    <video id="video" width="400" height="300" style="display: none;"></video>
     <canvas id="canvas" style="display: none;"></canvas>
-    <button id="complete">Hoàn thành</button>
+    <button id="complete" style="display: none;">Hoàn thành</button>
     <h2>Danh sách mã đã quét</h2>
     <ul id="list"></ul>
 
@@ -29,22 +30,37 @@
         const ctx = canvas.getContext('2d');
         const listElement = document.getElementById('list');
         const completeButton = document.getElementById('complete');
+        const startButton = document.getElementById('startScan');
 
         let scannedCodes = [];
         let lastScannedCode = null;
         let scanInterval;
+        let stream;
 
-        // Truy cập camera (camera sau nếu có)
-        navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } })
-            .then(stream => {
+        // Hàm bắt đầu quét
+        async function startScanning(facingMode = 'environment') {
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode } });
                 video.srcObject = stream;
-                video.play();
-                scanInterval = setInterval(scanQR, 500); // Quét mỗi 0.5 giây
-            })
-            .catch(err => {
+                await video.play();
+                video.style.display = 'block';
+                completeButton.style.display = 'inline-block';
+                startButton.style.display = 'none';
+                scanInterval = setInterval(scanQR, 300); // Tăng tần suất quét lên một chút
+            } catch (err) {
                 console.error('Lỗi truy cập camera: ', err);
-                alert('Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập.');
-            });
+                if (facingMode === 'environment') {
+                    // Thử fallback đến camera trước
+                    alert('Không thể truy cập camera sau. Thử camera trước...');
+                    startScanning('user');
+                } else {
+                    alert('Không thể truy cập camera. Vui lòng kiểm tra quyền truy cập và thử lại.');
+                }
+            }
+        }
+
+        // Sự kiện click nút bắt đầu
+        startButton.addEventListener('click', () => startScanning());
 
         // Hàm quét QR
         function scanQR() {
@@ -58,7 +74,9 @@
                 if (code && code.data !== lastScannedCode) {
                     playBeep();
                     addToList(code.data);
-                    lastScannedCode = code.data; // Tránh quét liên tục cùng mã
+                    lastScannedCode = code.data;
+                    // Reset lastScannedCode sau 2 giây để cho phép quét lại cùng mã nếu cần
+                    setTimeout(() => { lastScannedCode = null; }, 2000);
                 }
             }
         }
@@ -68,10 +86,10 @@
             const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
             const oscillator = audioCtx.createOscillator();
             oscillator.type = 'square';
-            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime); // Tần số beep
+            oscillator.frequency.setValueAtTime(1000, audioCtx.currentTime);
             oscillator.connect(audioCtx.destination);
             oscillator.start();
-            setTimeout(() => oscillator.stop(), 200); // Beep trong 200ms
+            setTimeout(() => oscillator.stop(), 200);
         }
 
         // Thêm vào danh sách
@@ -82,7 +100,6 @@
 
             scannedCodes.push(item);
 
-            // Cập nhật hiển thị
             const li = document.createElement('li');
             li.textContent = `STT: ${item.stt} | Thời gian: ${item.time} | Mã: ${item.code}`;
             listElement.appendChild(li);
@@ -95,7 +112,6 @@
                 return;
             }
 
-            // Tạo file XLSX
             const ws = XLSX.utils.json_to_sheet(scannedCodes.map(item => ({
                 'Số thứ tự': item.stt,
                 'Ngày giờ': item.time,
@@ -104,11 +120,16 @@
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, 'Danh sách mã QR');
 
-            // Tải file
             XLSX.writeFile(wb, 'danh_sach_ma_qr.xlsx');
 
-            // Dừng quét (tùy chọn)
+            // Dừng quét và camera
             clearInterval(scanInterval);
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+            video.style.display = 'none';
+            completeButton.style.display = 'none';
+            startButton.style.display = 'inline-block';
             alert('File đã được tải xuống!');
         });
     </script>

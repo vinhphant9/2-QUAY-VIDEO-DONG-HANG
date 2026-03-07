@@ -1,207 +1,260 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+<title>Quay Video Đóng Hàng</title>
+
+<style>
+body{
+margin:0;
+padding:0;
+display:flex;
+flex-direction:column;
+align-items:center;
+justify-content:center;
+height:100vh;
+background:#000;
+}
+
+#reader{
+width:100%;
+height:auto;
+position:relative;
+}
+
+#status{
+color:white;
+font-size:18px;
+margin-top:10px;
+text-align:center;
+}
+
+#video-overlay{
+position:absolute;
+top:0;
+left:0;
+width:100%;
+height:100%;
+pointer-events:none;
+color:white;
+font-size:20px;
+display:flex;
+align-items:flex-end;
+padding:10px;
+box-sizing:border-box;
+}
+</style>
+
+<script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+
+</head>
+
+<body>
+
+<div id="reader"></div>
+<div id="status">Đang chờ quét QR...</div>
+
 <script>
 
 const status = document.getElementById('status');
 const reader = document.getElementById('reader');
-const menuContainer = document.getElementById('menu-container');
-const qrListContainer = document.getElementById('qr-list-container');
-const qrList = document.getElementById('qr-list');
-const completeButton = document.getElementById('complete');
 
 let html5QrCode;
-let scannedCodes = [];
-let scannedSet = new Set();
-
-let returnCodes = [];
-let returnSet = new Set();
-
-let currentMode = '';
+let mediaRecorder;
+let recordedChunks = [];
+let isRecording = false;
+let lastQRCode = null;
+let currentQRCode = null;
+let videoElement;
+let stream;
 
 let audioCtx = new (window.AudioContext || window.webkitAudioContext)();
 
-function createBeep() {
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
+async function createBeep(){
 
-    oscillator.connect(gainNode);
-    gainNode.connect(audioCtx.destination);
-
-    oscillator.frequency.value = 1000;
-    gainNode.gain.value = 0.5;
-
-    oscillator.start();
-
-    setTimeout(() => {
-        oscillator.stop();
-    },200);
+if(audioCtx.state === 'suspended'){
+await audioCtx.resume();
 }
 
-function startScanner(){
+const oscillator = audioCtx.createOscillator();
+const gainNode = audioCtx.createGain();
 
-    html5QrCode = new Html5Qrcode("reader");
+oscillator.connect(gainNode);
+gainNode.connect(audioCtx.destination);
 
-    const config = {
-        fps:10,
-        qrbox:{width:250,height:250}
-    };
+oscillator.type = 'square';
+oscillator.frequency.value = 1000;
+gainNode.gain.value = 0.5;
 
-    html5QrCode.start(
-        {facingMode:"environment"},
-        config,
-        onScanSuccess
-    );
+oscillator.start();
+
+setTimeout(()=>{
+oscillator.stop();
+},200);
 
 }
 
-document.getElementById('btn-quet-ma-don').onclick = () => {
+async function startScanner(){
 
-    currentMode = "don";
+html5QrCode = new Html5Qrcode("reader");
 
-    scannedCodes = [];
-    scannedSet.clear();
+const config = { fps:10, qrbox:{ width:250, height:250 } };
 
-    qrList.innerHTML="";
+try{
 
-    menuContainer.style.display="none";
-    reader.style.display="block";
-    status.style.display="block";
-    qrListContainer.style.display="block";
+await html5QrCode.start(
+{ facingMode:"environment" },
+config,
+onScanSuccess,
+onScanFailure
+);
 
-    completeButton.style.display="inline-block";
+videoElement = reader.querySelector('video');
+stream = videoElement.captureStream();
 
-    status.textContent="Quét mã đơn";
+const overlay = document.createElement('div');
+overlay.id = 'video-overlay';
+reader.appendChild(overlay);
 
-    startScanner();
+status.textContent = 'Đang chờ quét QR...';
 
-};
+}catch(err){
 
-document.getElementById('btn-quet-don-hoan').onclick = () => {
+status.textContent = 'Lỗi khởi động camera: ' + err.message;
 
-    currentMode = "hoan";
+}
 
-    returnCodes = [];
-    returnSet.clear();
-
-    qrList.innerHTML="";
-
-    menuContainer.style.display="none";
-    reader.style.display="block";
-    status.style.display="block";
-    qrListContainer.style.display="block";
-
-    completeButton.style.display="inline-block";
-
-    status.textContent="Quét đơn hoàn";
-
-    startScanner();
-
-};
+}
 
 function onScanSuccess(decodedText){
 
-    if(currentMode==="don"){
+currentQRCode = decodedText;
 
-        if(scannedSet.has(decodedText)) return;
+if(!isRecording && currentQRCode !== lastQRCode){
 
-        scannedSet.add(decodedText);
+createBeep();
 
-        createBeep();
+startRecording();
 
-        const now = new Date();
+lastQRCode = currentQRCode;
 
-        const item = {
-            stt:scannedCodes.length+1,
-            time:now.toLocaleString('vi-VN'),
-            code:decodedText
-        };
+status.textContent = 'Đang ghi video với mã: ' + currentQRCode;
 
-        scannedCodes.push(item);
+updateOverlay();
 
-        addToList(item);
+}
+else if(isRecording && currentQRCode !== lastQRCode){
 
-    }
+createBeep();
 
-    if(currentMode==="hoan"){
+stopRecording();
 
-        if(returnSet.has(decodedText)) return;
+lastQRCode = currentQRCode;
 
-        returnSet.add(decodedText);
+status.textContent = 'Video đã lưu. Quét QR tiếp theo để bắt đầu.';
 
-        createBeep();
-
-        const now = new Date();
-
-        const item = {
-            stt:returnCodes.length+1,
-            time:now.toLocaleString('vi-VN'),
-            code:decodedText
-        };
-
-        returnCodes.push(item);
-
-        addToList(item);
-
-    }
+updateOverlay();
 
 }
 
-function addToList(item){
+}
 
-    const li = document.createElement("li");
+function onScanFailure(error){
+}
 
-    li.textContent = `${item.stt} | ${item.time} | ${item.code}`;
+function updateOverlay(){
 
-    qrList.appendChild(li);
+const overlay = document.getElementById('video-overlay');
+
+if(overlay){
+
+if(isRecording){
+
+const now = new Date();
+const dateTime = now.toLocaleString('vi-VN');
+
+overlay.textContent = dateTime + " - Mã: " + (lastQRCode || "");
+
+}else{
+
+overlay.textContent = "";
 
 }
 
-completeButton.onclick = ()=>{
+requestAnimationFrame(updateOverlay);
 
-    let data;
-    let filename;
+}
 
-    if(currentMode==="don"){
+}
 
-        data = scannedCodes;
-        filename = "ma_don.xlsx";
+function startRecording(){
 
-    }else{
+recordedChunks = [];
 
-        data = returnCodes;
-        filename = "don_hoan.xlsx";
+mediaRecorder = new MediaRecorder(stream);
 
-    }
-
-    if(data.length===0){
-
-        alert("Chưa có mã nào");
-
-        return;
-
-    }
-
-    html5QrCode.stop();
-
-    const ws = XLSX.utils.json_to_sheet(data.map(item=>({
-
-        "Số thứ tự":item.stt,
-        "Ngày giờ":item.time,
-        "Mã đơn":item.code
-
-    })));
-
-    const wb = XLSX.utils.book_new();
-
-    XLSX.utils.book_append_sheet(wb,ws,"Danh sách");
-
-    XLSX.writeFile(wb,filename);
-
-    alert("Đã tải file");
-
-    reader.style.display="none";
-    status.style.display="none";
-    qrListContainer.style.display="none";
-    menuContainer.style.display="block";
-
+mediaRecorder.ondataavailable = (event)=>{
+if(event.data.size > 0){
+recordedChunks.push(event.data);
+}
 };
 
+mediaRecorder.onstop = saveVideo;
+
+mediaRecorder.start();
+
+isRecording = true;
+
+}
+
+function stopRecording(){
+
+mediaRecorder.stop();
+
+isRecording = false;
+
+}
+
+function saveVideo(){
+
+const blob = new Blob(recordedChunks,{ type:'video/webm' });
+
+const url = URL.createObjectURL(blob);
+
+const a = document.createElement('a');
+
+a.style.display='none';
+a.href=url;
+a.download='video_'+ new Date().toISOString()+'.webm';
+
+document.body.appendChild(a);
+
+a.click();
+
+setTimeout(()=>{
+
+document.body.removeChild(a);
+
+URL.revokeObjectURL(url);
+
+status.textContent='Video đã tải về bộ nhớ điện thoại. Quét QR tiếp theo để bắt đầu.';
+
+},100);
+
+}
+
+document.addEventListener('touchend',()=>{
+
+if(audioCtx.state === 'suspended'){
+audioCtx.resume();
+}
+
+},{ once:true });
+
+startScanner();
+
 </script>
+
+</body>
+</html>
